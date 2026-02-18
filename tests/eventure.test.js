@@ -4,6 +4,8 @@ import { EventCoreService } from "../services/event-core-service/src/eventCoreSe
 import { InMemoryEventBus } from "../services/scheduling-service/src/eventBus.js";
 import { SchedulingService } from "../services/scheduling-service/src/schedulingService.js";
 import { NotificationService } from "../services/notification-service/src/notificationService.js";
+import { LeadRetrievalService } from "../services/lead-retrieval-service/src/leadRetrievalService.js";
+import { IntegrationService } from "../services/integration-service/src/crmConnectors.js";
 
 test("event lifecycle supports draft -> published -> archived", () => {
   const eventCore = new EventCoreService();
@@ -127,4 +129,187 @@ test("read model returns personalized attendee agenda", () => {
   const agenda = service.getPersonalizedAgenda("a3", "sched3");
   assert.equal(agenda.sessions.length, 1);
   assert.equal(agenda.sessions[0].sessionId, "s5");
+});
+
+test("lead retrieval captures, qualifies, and exports with consent and ownership controls", () => {
+  const eventBus = new InMemoryEventBus();
+  const service = new LeadRetrievalService({ eventBus });
+
+  service.registerOwnershipPolicy({
+    companyId: "comp1",
+    boothId: "booth1",
+    allowedUserIds: ["u1"],
+    exportEnabled: true
+  });
+
+  const captured = service.captureBadgeLead({
+    leadId: "lead1",
+    eventId: "ev1",
+    attendeeId: "att1",
+    actorUserId: "u1",
+    companyId: "comp1",
+    boothId: "booth1",
+    badgeScanId: "scan1",
+    tenantId: "tenant1",
+    traceId: "trace-1",
+    consent: {
+      granted: true,
+      policyVersion: "v2",
+      grantedAt: "2026-01-10T10:00:00.000Z"
+    },
+    qualification: {
+      interestLevel: "warm",
+      productInterest: ["analytics"],
+      notes: "Interested in product demo"
+    }
+  });
+
+  assert.equal(captured.status, "captured");
+
+  const qualified = service.qualifyLead({
+    leadId: "lead1",
+    actorUserId: "u1",
+    companyId: "comp1",
+    boothId: "booth1",
+    tenantId: "tenant1",
+    traceId: "trace-2",
+    qualification: {
+      interestLevel: "hot",
+      productInterest: ["analytics", "ai-planner"],
+      notes: "Ready for follow-up call"
+    }
+  });
+
+  assert.equal(qualified.status, "qualified");
+
+  const exported = service.exportLead({
+    leadId: "lead1",
+    actorUserId: "u1",
+    companyId: "comp1",
+    boothId: "booth1",
+    tenantId: "tenant1",
+    traceId: "trace-3"
+  });
+
+  assert.equal(exported.status, "exported");
+
+  const eventTypes = eventBus.allEvents().map((event) => event.type);
+  assert.deepEqual(eventTypes, ["LeadCaptured", "LeadQualified", "LeadExported"]);
+});
+
+test("lead capture enforces anti-abuse duplicate window and explicit consent", () => {
+  const service = new LeadRetrievalService({ eventBus: new InMemoryEventBus() });
+  service.registerOwnershipPolicy({
+    companyId: "comp2",
+    boothId: "booth2",
+    allowedUserIds: ["u2"],
+    exportEnabled: false
+  });
+
+  assert.throws(
+    () =>
+      service.captureBadgeLead({
+        leadId: "lead2",
+        eventId: "ev2",
+        attendeeId: "att2",
+        actorUserId: "u2",
+        companyId: "comp2",
+        boothId: "booth2",
+        badgeScanId: "scan2",
+        tenantId: "tenant2",
+        traceId: "trace-4",
+        consent: {
+          granted: false,
+          policyVersion: "v1",
+          grantedAt: "2026-01-10T10:00:00.000Z"
+        },
+        qualification: {
+          interestLevel: "cold",
+          productInterest: [],
+          notes: ""
+        }
+      }),
+    /Explicit attendee consent/
+  );
+
+  service.captureBadgeLead({
+    leadId: "lead3",
+    eventId: "ev2",
+    attendeeId: "att3",
+    actorUserId: "u2",
+    companyId: "comp2",
+    boothId: "booth2",
+    badgeScanId: "scan3",
+    tenantId: "tenant2",
+    traceId: "trace-5",
+    consent: {
+      granted: true,
+      policyVersion: "v1",
+      grantedAt: "2026-01-10T10:01:00.000Z"
+    },
+    qualification: {
+      interestLevel: "cold",
+      productInterest: [],
+      notes: ""
+    }
+  });
+
+  assert.throws(
+    () =>
+      service.captureBadgeLead({
+        leadId: "lead4",
+        eventId: "ev2",
+        attendeeId: "att3",
+        actorUserId: "u2",
+        companyId: "comp2",
+        boothId: "booth2",
+        badgeScanId: "scan4",
+        tenantId: "tenant2",
+        traceId: "trace-6",
+        consent: {
+          granted: true,
+          policyVersion: "v1",
+          grantedAt: "2026-01-10T10:02:00.000Z"
+        },
+        qualification: {
+          interestLevel: "cold",
+          productInterest: [],
+          notes: ""
+        }
+      }),
+    /Duplicate badge scan/
+  );
+});
+
+test("integration service maps leads to Salesforce and HubSpot objects", () => {
+  const integrationService = new IntegrationService();
+
+  const lead = {
+    leadId: "lead-map-1",
+    eventId: "ev-map-1",
+    attendeeId: "att-map-1",
+    companyId: "comp-map",
+    boothId: "booth-map",
+    consent: {
+      granted: true,
+      policyVersion: "v3",
+      grantedAt: "2026-01-10T11:00:00.000Z"
+    },
+    qualification: {
+      interestLevel: "warm",
+      productInterest: ["sponsorship", "mobile-app"],
+      notes: "Asked for pricing deck"
+    },
+    capturedAt: "2026-01-10T11:00:00.000Z",
+    qualifiedAt: "2026-01-10T11:30:00.000Z",
+    exportedAt: "2026-01-10T11:40:00.000Z"
+  };
+
+  const salesforce = integrationService.mapLeadForCrm({ lead, provider: "salesforce" });
+  assert.equal(salesforce.object, "Lead");
+  assert.equal(salesforce.attributes.External_Id__c, "lead-map-1");
+
+  const hubspot = integrationService.mapLeadForCrm({ lead, provider: "hubspot" });
+  assert.equal(hubspot.objectType, "contacts");
+  assert.equal(hubspot.properties.eventure_external_id, "lead-map-1");
 });
