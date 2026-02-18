@@ -26,7 +26,7 @@ export class EventCoreService {
     this.events = new Map();
   }
 
-  createDraftEvent({ id, name }) {
+  createDraftEvent({ id, name, tenantId = "public" }) {
     if (!id || !name) {
       throw new Error("Event id and name are required");
     }
@@ -34,6 +34,7 @@ export class EventCoreService {
     const event = {
       id,
       name,
+      tenantId,
       lifecycleState: VALID_STATES.DRAFT,
       sessions: []
     };

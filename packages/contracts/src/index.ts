@@ -6,6 +6,7 @@ export type SessionId = string;
 export type AttendeeId = string;
 export type TicketId = string;
 export type RoomId = string;
+export type LeadId = string;
 
 /**
  * Canonical identifier field names for payload validation and schema generation.
@@ -17,6 +18,8 @@ export const CANONICAL_ID_FIELDS = {
   ticket_id: "ticket_id",
   room_id: "room_id"
 } as const;
+
+export const LEAD_ID_FIELD = "lead_id" as const;
 
 /**
  * Shared envelope metadata present on every published domain event.
@@ -60,7 +63,46 @@ export interface SessionAttendanceUpdated extends EventEnvelope {
   };
 }
 
+export interface LeadCaptured extends EventEnvelope {
+  event_type: "LeadCaptured";
+  payload: {
+    lead_id: LeadId;
+    event_id: EventId;
+    attendee_id: AttendeeId;
+    company_id: string;
+    booth_id: string;
+    badge_scan_id: string;
+    consent_policy_version: string;
+  };
+}
+
+export interface LeadQualified extends EventEnvelope {
+  event_type: "LeadQualified";
+  payload: {
+    lead_id: LeadId;
+    attendee_id: AttendeeId;
+    company_id: string;
+    booth_id: string;
+    interest_level: "hot" | "warm" | "cold";
+    product_interest: string[];
+  };
+}
+
+export interface LeadExported extends EventEnvelope {
+  event_type: "LeadExported";
+  payload: {
+    lead_id: LeadId;
+    attendee_id: AttendeeId;
+    company_id: string;
+    booth_id: string;
+    exported_by: string;
+  };
+}
+
 export type DomainEvent =
   | RegistrationCompleted
   | CheckinRecorded
-  | SessionAttendanceUpdated;
+  | SessionAttendanceUpdated
+  | LeadCaptured
+  | LeadQualified
+  | LeadExported;
