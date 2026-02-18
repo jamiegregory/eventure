@@ -4,6 +4,8 @@ import { EventCoreService } from "../services/event-core-service/src/eventCoreSe
 import { InMemoryEventBus } from "../services/scheduling-service/src/eventBus.js";
 import { SchedulingService } from "../services/scheduling-service/src/schedulingService.js";
 import { NotificationService } from "../services/notification-service/src/notificationService.js";
+import { CheckinService, EVENT_TYPES, ONSITE_MODES } from "../services/checkin-service/src/checkinService.js";
+import { OfflineCheckinClient } from "../services/checkin-service/src/offlineSyncClient.js";
 import { InMemoryPubSubEventBus } from "../services/room-scheduling-service/src/eventBus.js";
 import { EVENT_TYPES, RoomSchedulingService } from "../services/room-scheduling-service/src/roomSchedulingService.js";
 import {
@@ -136,6 +138,104 @@ test("read model returns personalized attendee agenda", () => {
   assert.equal(agenda.sessions[0].sessionId, "s5");
 });
 
+test("checkin transactions support attendee lookup and idempotency", () => {
+  const eventBus = new InMemoryEventBus();
+  const service = new CheckinService({ eventBus });
+
+  service.registerAttendee({
+    id: "a100",
+    name: "Alex Doe",
+    email: "alex@example.com",
+    qrCode: "qr-100",
+    barcode: "bc-100"
+  });
+
+  const firstCheckin = service.recordCheckinTransaction({
+    idempotencyKey: "idem-1",
+    attendeeLookup: { qrCode: "qr-100" },
+    mode: ONSITE_MODES.KIOSK,
+    stationId: "kiosk-1"
+  });
+  const replay = service.recordCheckinTransaction({
+    idempotencyKey: "idem-1",
+    attendeeLookup: { barcode: "bc-100" },
+    mode: ONSITE_MODES.KIOSK,
+    stationId: "kiosk-1"
+  });
+
+  assert.equal(firstCheckin.status, "checked-in");
+  assert.equal(replay.idempotentReplay, true);
+
+  const eventTypes = eventBus.allEvents().map((event) => event.type);
+  assert.equal(eventTypes[0], EVENT_TYPES.CHECKIN_RECORDED);
+});
+
+test("onsite staff mode, badge print integration, reverse event, and ops dashboard", () => {
+  const eventBus = new InMemoryEventBus();
+  const service = new CheckinService({ eventBus });
+
+  service.registerAttendee({
+    id: "a200",
+    name: "Sam Operator",
+    email: "sam@example.com",
+    qrCode: "qr-200",
+    barcode: "bc-200"
+  });
+
+  service.recordCheckinTransaction({
+    attendeeLookup: { manualQuery: { attendeeId: "a200" } },
+    mode: ONSITE_MODES.STAFF,
+    stationId: "staff-desk-1"
+  });
+
+  const queuedJob = service.badgePrintQueue[0];
+  assert.equal(queuedJob.status, "queued");
+
+  service.processBadgePrintJob(queuedJob.id);
+  service.reverseCheckin({
+    attendeeId: "a200",
+    reason: "duplicate",
+    operatorId: "op-1"
+  });
+
+  const dashboard = service.getOperationalDashboard();
+  assert.equal(typeof dashboard.queueLength, "number");
+  assert.equal(typeof dashboard.throughputPerMinute, "number");
+
+  const eventTypes = eventBus.allEvents().map((event) => event.type);
+  assert.deepEqual(eventTypes, [
+    EVENT_TYPES.CHECKIN_RECORDED,
+    EVENT_TYPES.BADGE_PRINTED,
+    EVENT_TYPES.CHECKIN_REVERSED
+  ]);
+});
+
+test("offline-first client queue sync applies operations and resolves conflicts", () => {
+  const service = new CheckinService({ eventBus: new InMemoryEventBus() });
+
+  service.registerAttendee({ id: "a300", name: "Offline User", email: "offline@example.com" });
+
+  const client = new OfflineCheckinClient({ deviceId: "device-1" });
+
+  client.enqueueOperation({
+    clientOperationId: "c1",
+    type: "checkin",
+    payload: { attendeeId: "a300", mode: ONSITE_MODES.KIOSK, stationId: "kiosk-7" },
+    occurredAt: "2026-01-10T10:00:00.000Z"
+  });
+
+  const syncResult = client.syncWith(service);
+  assert.equal(syncResult.applied.length, 1);
+
+  client.enqueueOperation({
+    clientOperationId: "c2",
+    type: "checkin",
+    payload: { attendeeId: "a300", mode: ONSITE_MODES.KIOSK, stationId: "kiosk-7" },
+    occurredAt: "2026-01-09T10:00:00.000Z"
+  });
+
+  const conflictResult = client.syncWith(service);
+  assert.equal(conflictResult.conflicts.length, 1);
 test("room scheduling solver models room constraints and finalizes drafted schedules", () => {
   const eventBus = new InMemoryPubSubEventBus();
   const roomService = new RoomSchedulingService({ eventBus });
