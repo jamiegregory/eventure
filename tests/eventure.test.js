@@ -4,6 +4,11 @@ import { EventCoreService } from "../services/event-core-service/src/eventCoreSe
 import { InMemoryEventBus } from "../services/scheduling-service/src/eventBus.js";
 import { SchedulingService } from "../services/scheduling-service/src/schedulingService.js";
 import { NotificationService } from "../services/notification-service/src/notificationService.js";
+import {
+  ATTENDEE_STATES,
+  REGISTRATION_EVENTS,
+  RegistrationService
+} from "../services/registration-service/src/registrationService.js";
 
 test("event lifecycle supports draft -> published -> archived", () => {
   const eventCore = new EventCoreService();
@@ -127,4 +132,146 @@ test("read model returns personalized attendee agenda", () => {
   const agenda = service.getPersonalizedAgenda("a3", "sched3");
   assert.equal(agenda.sessions.length, 1);
   assert.equal(agenda.sessions[0].sessionId, "s5");
+});
+
+test("registration service supports form builder, policies, and state transitions", () => {
+  const eventBus = new InMemoryEventBus();
+  const service = new RegistrationService({ eventBus });
+
+  const form = service.configureForm({
+    eventId: "ev-reg-1",
+    fields: [
+      { id: "company", type: "text", required: true },
+      { id: "needsAccommodation", type: "boolean" }
+    ],
+    conditionalQuestions: [
+      {
+        id: "hotelDetails",
+        when: { fieldId: "needsAccommodation", equals: true },
+        question: "Please share your hotel requirements"
+      }
+    ]
+  });
+
+  assert.equal(form.fields.length, 2);
+  assert.equal(form.conditionalQuestions.length, 1);
+
+  service.configurePolicy({
+    eventId: "ev-reg-1",
+    capacity: 1,
+    approvalsRequired: false,
+    inviteOnly: true,
+    invitedAttendeeIds: ["a1", "a2"]
+  });
+
+  service.startRegistration({
+    commandId: "cmd-start-1",
+    registrationId: "reg1",
+    eventId: "ev-reg-1",
+    attendeeId: "a1",
+    answers: { company: "Eventure" }
+  });
+  const approved = service.submitRegistration({
+    commandId: "cmd-submit-1",
+    registrationId: "reg1"
+  });
+  assert.equal(approved.state, ATTENDEE_STATES.APPROVED);
+
+  service.startRegistration({
+    commandId: "cmd-start-2",
+    registrationId: "reg2",
+    eventId: "ev-reg-1",
+    attendeeId: "a2",
+    answers: { company: "Waitlist Co" }
+  });
+  const waitlisted = service.submitRegistration({
+    commandId: "cmd-submit-2",
+    registrationId: "reg2"
+  });
+  assert.equal(waitlisted.state, ATTENDEE_STATES.WAITLISTED);
+
+  const cancelled = service.cancelRegistration({
+    commandId: "cmd-cancel-1",
+    registrationId: "reg2",
+    reason: "Can no longer attend"
+  });
+  assert.equal(cancelled.state, ATTENDEE_STATES.CANCELLED);
+
+  const eventTypes = eventBus.allEvents().map((event) => event.type);
+  assert.deepEqual(eventTypes, [
+    REGISTRATION_EVENTS.STARTED,
+    REGISTRATION_EVENTS.COMPLETED,
+    REGISTRATION_EVENTS.STARTED,
+    REGISTRATION_EVENTS.WAITLISTED,
+    REGISTRATION_EVENTS.CANCELLED
+  ]);
+});
+
+test("registration commands are idempotent and prevent duplicate active registrations", () => {
+  const service = new RegistrationService({ eventBus: new InMemoryEventBus() });
+
+  const started = service.startRegistration({
+    commandId: "dup-cmd-start",
+    registrationId: "dup-reg-1",
+    eventId: "ev-reg-2",
+    attendeeId: "a10"
+  });
+  const replayed = service.startRegistration({
+    commandId: "dup-cmd-start",
+    registrationId: "dup-reg-1",
+    eventId: "ev-reg-2",
+    attendeeId: "a10"
+  });
+  assert.deepEqual(replayed, started);
+
+  assert.throws(() => {
+    service.startRegistration({
+      commandId: "dup-cmd-start-2",
+      registrationId: "dup-reg-2",
+      eventId: "ev-reg-2",
+      attendeeId: "a10"
+    });
+  }, /Duplicate registration attempt/);
+});
+
+test("registration reporting exposes analytics-friendly summary", () => {
+  const service = new RegistrationService({ eventBus: new InMemoryEventBus() });
+
+  service.configurePolicy({
+    eventId: "ev-reg-3",
+    capacity: 5,
+    approvalsRequired: true
+  });
+
+  service.startRegistration({
+    commandId: "rep-start-1",
+    registrationId: "rep-reg-1",
+    eventId: "ev-reg-3",
+    attendeeId: "a1"
+  });
+  service.submitRegistration({
+    commandId: "rep-submit-1",
+    registrationId: "rep-reg-1"
+  });
+  service.approveRegistration({
+    commandId: "rep-approve-1",
+    registrationId: "rep-reg-1"
+  });
+
+  service.startRegistration({
+    commandId: "rep-start-2",
+    registrationId: "rep-reg-2",
+    eventId: "ev-reg-3",
+    attendeeId: "a2"
+  });
+  service.cancelRegistration({
+    commandId: "rep-cancel-2",
+    registrationId: "rep-reg-2",
+    reason: "No time"
+  });
+
+  const report = service.getAnalyticsReport("ev-reg-3");
+  assert.equal(report.totals.registrations, 2);
+  assert.equal(report.byState.approved, 1);
+  assert.equal(report.byState.cancelled, 1);
 });
