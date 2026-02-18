@@ -4,6 +4,11 @@ import { EventCoreService } from "../services/event-core-service/src/eventCoreSe
 import { InMemoryEventBus } from "../services/scheduling-service/src/eventBus.js";
 import { SchedulingService } from "../services/scheduling-service/src/schedulingService.js";
 import { NotificationService } from "../services/notification-service/src/notificationService.js";
+import {
+  AttendeeTrackingService,
+  InMemoryAnalyticsPublisher
+} from "../services/attendee-tracking-service/src/attendeeTrackingService.js";
+
 
 test("event lifecycle supports draft -> published -> archived", () => {
   const eventCore = new EventCoreService();
@@ -127,4 +132,137 @@ test("read model returns personalized attendee agenda", () => {
   const agenda = service.getPersonalizedAgenda("a3", "sched3");
   assert.equal(agenda.sessions.length, 1);
   assert.equal(agenda.sessions[0].sessionId, "s5");
+});
+test("attendee tracking ingests check-in, session, and beacon events into timeline", () => {
+  const tracking = new AttendeeTrackingService();
+
+  tracking.ingestEvent({
+    type: "check-in",
+    attendeeId: "a10",
+    timestamp: "2026-01-10T09:00:00.000Z",
+    action: "enter"
+  });
+
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a10",
+    sessionId: "s100",
+    timestamp: "2026-01-10T09:05:00.000Z",
+    action: "enter"
+  });
+
+  tracking.ingestEvent({
+    type: "beacon-proximity",
+    attendeeId: "a10",
+    zoneId: "expo-hall",
+    timestamp: "2026-01-10T09:15:00.000Z",
+    action: "enter",
+    proximityBand: "immediate"
+  });
+
+  tracking.ingestEvent({
+    type: "beacon-proximity",
+    attendeeId: "a10",
+    zoneId: "expo-hall",
+    timestamp: "2026-01-10T09:45:00.000Z",
+    action: "exit"
+  });
+
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a10",
+    sessionId: "s100",
+    timestamp: "2026-01-10T10:00:00.000Z",
+    action: "exit"
+  });
+
+  const timeline = tracking.getTimeline("a10");
+  assert.equal(timeline.sessions.s100.intervals.length, 1);
+  assert.equal(timeline.zones["expo-hall"].intervals.length, 1);
+  assert.equal(timeline.venue.open, "2026-01-10T09:00:00.000Z");
+});
+
+test("engagement metrics include sessions attended, overlap anomalies, and dwell durations", () => {
+  const tracking = new AttendeeTrackingService();
+
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a11",
+    sessionId: "s1",
+    timestamp: "2026-01-10T09:00:00.000Z",
+    action: "enter"
+  });
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a11",
+    sessionId: "s1",
+    timestamp: "2026-01-10T09:45:00.000Z",
+    action: "exit"
+  });
+
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a11",
+    sessionId: "s2",
+    timestamp: "2026-01-10T09:30:00.000Z",
+    action: "enter"
+  });
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a11",
+    sessionId: "s2",
+    timestamp: "2026-01-10T10:15:00.000Z",
+    action: "exit"
+  });
+
+  const metrics = tracking.computeEngagementMetrics("a11");
+  assert.equal(metrics.sessionsAttended, 2);
+  assert.equal(metrics.overlapAnomalies.length, 1);
+  assert.equal(metrics.dwellDurationMs.sessions, 90 * 60 * 1000);
+});
+
+test("privacy controls enforce consent, retention, anonymization, and analytics publishing", () => {
+  const publisher = new InMemoryAnalyticsPublisher();
+  const tracking = new AttendeeTrackingService({
+    analyticsPublisher: publisher,
+    retention: {
+      eventRetentionMs: 60 * 1000,
+      timelineRetentionMs: 60 * 1000
+    }
+  });
+
+  tracking.registerConsent("a12", { tracking: false, analytics: false });
+  const rejected = tracking.ingestEvent({
+    type: "check-in",
+    attendeeId: "a12",
+    timestamp: "2026-01-10T09:00:00.000Z"
+  });
+  assert.equal(rejected.accepted, false);
+
+  tracking.registerConsent("a12", { tracking: true, analytics: true });
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a12",
+    sessionId: "s3",
+    timestamp: "2026-01-10T09:00:00.000Z",
+    action: "enter"
+  });
+  tracking.ingestEvent({
+    type: "session-scan",
+    attendeeId: "a12",
+    sessionId: "s3",
+    timestamp: "2026-01-10T09:10:00.000Z",
+    action: "exit"
+  });
+
+  const anonymizeResult = tracking.runAnonymizationJob({ salt: "test-salt" });
+  assert.equal(anonymizeResult.anonymizedAttendees, 1);
+
+  const analyticsMessage = tracking.publishAggregatesForAnalytics();
+  assert.equal(analyticsMessage.type, "AttendeeEngagementAggregates");
+  assert.equal(analyticsMessage.payload.sessions[0].sessionId, "s3");
+
+  const retentionResult = tracking.applyRetentionPolicy({ now: new Date("2026-01-10T10:30:00.000Z").getTime() });
+  assert.equal(retentionResult.retainedEvents, 0);
+  assert.equal(retentionResult.retainedTimelines, 0);
 });
