@@ -1,0 +1,38 @@
+openapi: 3.1.0
+info:
+  title: Organizer BFF API
+  version: 1.0.0
+paths:
+  /registrations:
+    get:
+      summary: List registrations for event
+      parameters:
+        - in: query
+          name: eventId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Registration list
+  /registrations/approve:
+    post:
+      summary: Approve a pending registration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                registrationId:
+                  type: string
+      responses:
+        "200":
+          description: Approved registration
+  /overview:
+    get:
+      summary: Composite event roster and schedule view
+      responses:
+        "200":
+          description: Organizer view payload

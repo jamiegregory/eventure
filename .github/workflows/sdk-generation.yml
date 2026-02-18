@@ -1,0 +1,27 @@
+name: Generate SDKs
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - docs/openapi/**
+      - scripts/generate-sdks.mjs
+      - .github/workflows/sdk-generation.yml
+  pull_request:
+    paths:
+      - docs/openapi/**
+      - scripts/generate-sdks.mjs
+      - .github/workflows/sdk-generation.yml
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/generate-sdks.mjs
+      - name: Verify generated SDK artifacts are committed
+        run: |
+          git diff --exit-code -- packages/clients
