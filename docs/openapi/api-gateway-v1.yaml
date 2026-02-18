@@ -1,0 +1,51 @@
+openapi: 3.1.0
+info:
+  title: Eventure API Gateway
+  version: 1.0.0
+servers:
+  - url: https://api.eventure.local
+paths:
+  /api/v1/organizer/overview:
+    get:
+      summary: Organizer composed overview
+      parameters:
+        - in: query
+          name: eventId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Composed organizer payload
+  /api/v1/attendee/overview:
+    get:
+      summary: Attendee composed overview
+      parameters:
+        - in: query
+          name: attendeeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Composed attendee payload
+  /api/v1/attendee/check-in:
+    post:
+      summary: Submit attendee check-in QR code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                qrCode:
+                  type: string
+      responses:
+        "201":
+          description: Check-in record created
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

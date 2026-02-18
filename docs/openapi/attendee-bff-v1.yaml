@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+  title: Attendee BFF API
+  version: 1.0.0
+paths:
+  /agenda:
+    get:
+      summary: Personalized agenda for attendee
+      parameters:
+        - in: query
+          name: attendeeId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agenda response
+  /tickets:
+    get:
+      summary: List attendee tickets
+      responses:
+        "200":
+          description: Ticket list
+  /check-in:
+    post:
+      summary: Check in attendee via QR code
+      responses:
+        "201":
+          description: Check-in success
+  /notifications:
+    get:
+      summary: List attendee notifications
+      responses:
+        "200":
+          description: Notification list
+  /overview:
+    get:
+      summary: Composite attendee registration/ticket/schedule/room payload
+      responses:
+        "200":
+          description: Attendee view payload
