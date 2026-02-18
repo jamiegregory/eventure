@@ -1,20 +1,8 @@
 {
-  "name": "eventure-platform",
-  "private": true,
+  "name": "eventure",
   "version": "1.0.0",
-  "workspaces": [
-    "apps/frontend",
-    "apps/backend"
-  ],
+  "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace apps/backend\" \"npm run dev --workspace apps/frontend\"",
-    "build": "npm run build --workspace apps/backend && npm run build --workspace apps/frontend",
-    "typecheck": "npm run typecheck --workspace apps/backend && npm run typecheck --workspace apps/frontend"
-  },
-  "devDependencies": {
-    "concurrently": "^9.1.2"
-  },
-  "engines": {
-    "node": ">=20.0.0"
+    "test": "node --test"
   }
 }
