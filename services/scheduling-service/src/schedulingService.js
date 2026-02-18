@@ -76,9 +76,10 @@ export class SchedulingService {
   }
 
   // API: POST /proposals
-  createProposal({ scheduleId, slots, attendeeIds = [] }) {
+  createProposal({ scheduleId, slots, attendeeIds = [], tenantId = "public" }) {
     const proposal = {
       scheduleId,
+      tenantId,
       slots,
       attendeeIds,
       status: "draft",
