@@ -11,3 +11,7 @@ Run tests with:
 ```bash
 npm test
 ```
+## Architecture
+
+- `docs/architecture/platform-readiness-plan.md`: observability, compliance, rollout phases, migration/backfill, and resilience validation plan.
+
